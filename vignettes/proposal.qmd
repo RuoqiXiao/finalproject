@@ -1,0 +1,205 @@
+---
+title: "Project proposal: State firearm legislation and firearm mortality in the USA"
+author: "Ruoqi Xiao"
+date: 2026-11-16
+---
+
+**To:** BST260 Teaching Team, Fall 2026\
+**From:** Ruoqi Xiao (GitHub: [RuoqiXiao](https://github.com/RuoqiXiao))\
+**Re:** Final project proposal\
+**Project site:** <https://ruoqixiao.github.io/finalproject/>
+
+```{r setup, include = FALSE}
+data("gunleg", package = "finalproject")
+data("cdcfiremort", package = "finalproject")
+data("cdcmurd", package = "finalproject")
+```
+
+# Summary
+
+I plan to study how state firearm legislation relates to firearm mortality
+in the 50 US states and the District of Columbia. The project uses two datasets
+that ship with this package: the RAND Corporation *State Firearm Law Database*
+(`gunleg`) as the source of the exposure, and the CDC/NCHS state-level firearm
+mortality statistics (`cdcfiremort`) as the source of the outcome. The CDC
+homicide mortality data (`cdcmurd`) will serve as a secondary outcome. The
+analysis is organized into two vignettes. The first describes the legislation
+data and builds the exposure measures. The second describes the mortality data
+and relates them to those exposure measures.
+
+# Research question
+
+> Among US states, is a more restrictive firearm-law environment associated with
+> a lower age-adjusted firearm death rate in the same year?
+
+- **Exposure:** the net restrictiveness of the state firearm laws in effect in a
+  given state and year (defined below). Selected law classes, especially
+  background checks and concealed-carry permitting, will be examined individually
+  as a small cluster of related exposures.
+- **Outcome:** the age-adjusted firearm death rate per 100,000 population
+  (`cdcfiremort$Death.Rate`).
+
+# Data and provenance
+
+| Dataset | Source | Unit | Coverage |
+|---|---|---|---|
+| `gunleg` | RAND Corporation, *State Firearm Law Database* ([link](https://www.rand.org/pubs/tools/TLA243-2-v4.html)) | one row per law change | `r nrow(gunleg)` law changes, `r length(unique(gunleg$State))` jurisdictions, effective years `r min(gunleg$Effective.Date.Year)`–`r max(gunleg$Effective.Date.Year)` |
+| `cdcfiremort` | CDC/NCHS state statistics, firearm mortality ([link](https://www.cdc.gov/nchs/state-stats/deaths/firearms.html)) | state-year | `r length(unique(cdcfiremort$Location))` jurisdictions; years `r paste(sort(unique(cdcfiremort$YEAR))[1:2], collapse = ", ")`–`r max(cdcfiremort$YEAR)` |
+| `cdcmurd` | CDC/NCHS state statistics, homicide mortality ([link](https://www.cdc.gov/nchs/state-stats/deaths/homicide.html)) | state-year | same years as `cdcfiremort` |
+
+Two features of the data shape the analysis plan:
+
+- The CDC series cover 2005 and then 2014–2024, so **2006–2013 are missing**.
+  The main analysis will use the continuous 2014–2024 panel, and 2005 will serve
+  as a baseline.
+- `cdcfiremort` identifies states by full name, while `cdcmurd` uses postal
+  abbreviations. `gunleg` has both, so it will provide the key for joining all
+  three datasets.
+
+For each dataset, the vignettes will document the original source, the date it
+was retrieved, what the variables measure (for example, that CDC death rates are
+age-adjusted), and any cleaning steps applied.
+
+# Unit of analysis and population
+
+- **Unit of analysis:** state-year.
+- **Population:** the 50 US states plus the District of Columbia, 2014–2024
+  (51 × 11 = 561 state-years), with 2005 as a baseline year.
+
+# Exposure definition and coding
+
+In `gunleg`, each row records a law change. Its key fields are an effective date
+(`Effective.Date.Year`), a supersession date (`Supersession.Date.Year`, which is
+`NA` while the law is still in force), a direction (`Effect`: Restrictive or
+Permissive), and a category (`Law.Class`). I will code the exposure as follows:
+
+1. **Laws in effect:** a law counts as in effect in state *s* and year *t* if
+   `Effective.Date.Year <= t` and the law has not been superseded by year *t*
+   (`Supersession.Date.Year` is `NA` or `> t`).
+2. **Net restrictiveness index:** for each state-year, the number of restrictive
+   laws in effect minus the number of permissive laws in effect.
+3. **Law-class indicators:** binary indicators for selected classes, such as
+   whether a state has a restrictive background-check law in effect.
+4. **Legislative profile:** a state × law-class matrix of net restrictiveness,
+   summarized by principal component analysis (PCA). Unlike the simple index in
+   step 2, the leading components let different kinds of laws carry different
+   weights.
+
+Missing and ambiguous records will be handled explicitly:
+
+- the `r sum(gunleg$Type.of.Change == "See note")` rows whose `Type.of.Change`
+  is "See note" will be reviewed by hand;
+- rows with entries in `Discrepancies` or `Effective.Date.Note` will be flagged,
+  and a sensitivity analysis will drop them;
+- repeals (`Type.of.Change == "Repeal"`) will be checked to make sure the law
+  they reverse is removed from the count.
+
+I will write the coding logic as reusable R functions in the package, for
+example `laws_in_effect(state, year)` and `restrictiveness_index(year)`, so the
+same rules apply to every state and year.
+
+```{r law-overview, echo = FALSE}
+knitr::kable(
+  as.data.frame(table(Effect = gunleg$Effect, Change = gunleg$Type.of.Change)),
+  caption = "Law changes in `gunleg` by direction and type of change"
+)
+```
+
+# Outcome definition
+
+- **Primary outcome:** the age-adjusted firearm death rate per 100,000
+  (`cdcfiremort$Death.Rate`), a continuous variable. Across all state-years it
+  ranges from `r min(cdcfiremort$Death.Rate)` to `r max(cdcfiremort$Death.Rate)`,
+  with median `r median(cdcfiremort$Death.Rate)`.
+- **Secondary outcome:** the homicide death rate per 100,000
+  (`cdcmurd$Death.Rate`). Comparing the two outcomes helps separate the
+  homicide and non-homicide (mostly suicide) parts of firearm mortality, which
+  may respond differently to legislation.
+
+# Confounders (chosen before looking at the associations)
+
+On subject-matter grounds, I will adjust for:
+
+- **Calendar year**, to absorb national trends such as the 2020–2021 rise in
+  firearm deaths.
+- **Census region and division** (`state.region`, `state.division`), as proxies
+  for regional differences in culture, rurality and baseline gun ownership.
+- **Baseline (2005) firearm death rate**, because states with high mortality may
+  be more likely to pass new laws (reverse causation).
+
+Important confounders that are not in the package data include household gun
+ownership, poverty, urbanicity and policing. I will discuss them as limitations.
+If time allows, I will seek approval to add a state-level covariate file from
+public Census sources.
+
+# Planned analyses and vignettes
+
+The project has two analysis vignettes, each built on a different dataset. Each
+vignette draws on methods covered in BST260.
+
+**Vignette 1: State firearm legislation over time** (`gunleg`)
+
+- *Provenance and tidying:* document the RAND source, and convert the
+  law-change records into a state-year panel of laws in effect.
+- *Descriptive statistics:* law changes by class, direction and decade, and
+  the share of restrictive versus permissive changes.
+- *Smoothing:* loess curves of the number of laws in effect over time,
+  nationally and by census region.
+- *Dimension reduction:* PCA of the state × law-class matrix to describe each
+  state's legislative profile and to identify states with similar profiles.
+- *Output:* the restrictiveness index, the law-class indicators and the PCA
+  scores, which become the exposures in Vignette 2.
+
+**Vignette 2: Firearm mortality and legislation** (`cdcfiremort`, with
+`cdcmurd` as a secondary outcome)
+
+- *Provenance and harmonization:* document the CDC/NCHS source, align state
+  identifiers across the two files, and join the exposures from Vignette 1.
+- *Descriptive statistics with confidence intervals:* mean firearm and homicide
+  death rates by region and year, with 95% confidence intervals.
+- *Smoothing:* loess trends in death rates by region, and smoothed plots of
+  death rate against the restrictiveness index.
+- *Multivariable regression:* death rate on the restrictiveness index (or PCA
+  scores), adjusted for year, region and the 2005 baseline rate.
+- *Hierarchical model:* a linear mixed model with state random intercepts, with
+  states nested in census divisions, to account for repeated measurements on
+  each state.
+- *Treatment effect model:* a difference-in-differences comparison of states
+  that adopted a specific type of law during 2014–2024 with states that did
+  not, before and after adoption. Two law types have enough adoptions between
+  2015 and 2023 to leave data both before and after adoption: permitless
+  concealed carry (a permissive change, in 23 states) and stricter background
+  checks (a restrictive change, in 10 states).
+- *Resampling:* a state-level (cluster) bootstrap for confidence intervals of
+  the main estimates, and a permutation test that shuffles treatment status
+  across states.
+- *Sensitivity analyses:* lagged exposure (laws in effect at *t* − 1), the
+  homicide outcome in place of all firearm deaths, and excluding law records
+  flagged with discrepancies.
+- *Optional extensions, if time allows:* a Bayesian version of the hierarchical
+  model, and nearest-neighbor matching of adopting states to similar
+  non-adopting states based on their PCA profiles.
+
+# Anticipated limitations
+
+- **Ecological design:** associations between states cannot be applied to
+  individuals.
+- **Causal interpretation:** this is observational panel data. Legislation may
+  respond to mortality, and unmeasured confounding is likely, so findings will be
+  described as associations.
+- **Exposure measurement:** a simple count treats all laws as equally
+  important. The PCA profile only partly addresses this. Enforcement and
+  implementation are not observed.
+- **Gaps in the outcome series:** 2006–2013 are missing, which limits the study
+  of laws enacted in those years.
+- **Rates without strata:** the CDC files contain only overall rates, so
+  differences by age, sex, race or intent (suicide vs. homicide) cannot be
+  modeled directly.
+
+# Deliverables
+
+- An R package (`finalproject`) containing the data, documented helper
+  functions (for example `laws_in_effect()` and `restrictiveness_index()`),
+  and two Quarto analysis vignettes.
+- A pkgdown site at <https://ruoqixiao.github.io/finalproject/> presenting
+  the analyses, with this proposal under Articles.
